@@ -1,22 +1,56 @@
-# On-Premises Deployment Guide
+# On-Premises Deployment Guide — Ubuntu 24.04
 
 ## Prerequisites
 
-- **Docker** ≥ 20.10 and **Docker Compose** ≥ 2.0, **OR**
-- **Node.js** ≥ 20 and a static file server (Nginx, Apache, Caddy)
+- **Ubuntu 24.04 LTS** (Noble Numbat) — fresh or existing installation
+- Root / sudo access
+- Minimum 1 CPU, 512 MB RAM, 1 GB disk
 
 ---
 
-## Option 1: Docker (Recommended)
-
-### Quick Start
+## Quick Install (Recommended)
 
 ```bash
 # Clone the repository
 git clone <your-repo-url> network-monitor
 cd network-monitor
 
-# Build and start
+# Docker method (installs Docker if needed)
+sudo bash install.sh --method docker --port 8080
+
+# OR: Static Nginx method (installs Node 20 + Nginx)
+sudo bash install.sh --method static --port 8080
+```
+
+The installer handles all dependencies, builds the app, configures the firewall, and starts the service.
+
+### Uninstall
+
+```bash
+sudo bash uninstall.sh
+```
+
+---
+
+## Manual Installation
+
+### Option 1: Docker
+
+```bash
+# Install Docker
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc > /dev/null
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+  https://download.docker.com/linux/ubuntu noble stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Clone and start
+git clone <your-repo-url> network-monitor
+cd network-monitor
 docker compose up -d
 
 # App is available at http://localhost:8080
