@@ -1,0 +1,12 @@
+services:
+  pingplotter:
+    build: .
+    container_name: network-monitor
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
