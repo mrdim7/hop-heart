@@ -1,4 +1,21 @@
-# On-Premises Deployment Guide — Ubuntu 24.04
+# Network Monitor — On-Premises Deployment (Ubuntu 24.04)
+
+## Architecture
+
+```
+┌─────────────────┐     HTTP/REST      ┌──────────────────┐
+│  Browser (UI)   │ ◄───────────────── │  Python Agent    │
+│  React + Vite   │     polling        │  (ping/traceroute)│
+│  :8080          │                    │  :5000           │
+└─────────────────┘                    └──────────────────┘
+```
+
+The UI is a static React app. The **monitoring agent** is a Python Flask server that
+runs real `ping` and `traceroute` commands and exposes the results via REST API.
+
+When the agent is unreachable, the UI falls back to simulated data automatically.
+
+---
 
 ## Prerequisites
 
@@ -8,68 +25,185 @@
 
 ---
 
-## Quick Install (Recommended)
+## Quick Start (Docker — Recommended)
 
 ```bash
-# Clone the repository
-git clone <your-repo-url> network-monitor
-cd network-monitor
+git clone <repo-url> && cd network-monitor
+sudo docker compose up -d --build
 
-# Docker method (installs Docker if needed)
-sudo bash install.sh --method docker --port 8080
-
-# OR: Static Nginx method (installs Node 20 + Nginx)
-sudo bash install.sh --method static --port 8080
+# UI:    http://localhost:8080
+# Agent: http://localhost:5000/api/health
 ```
 
-The installer handles all dependencies, builds the app, configures the firewall, and starts the service.
-
-### Uninstall
+## Quick Start (Automated Script)
 
 ```bash
-sudo bash uninstall.sh
+chmod +x install.sh
+sudo ./install.sh --method docker    # Docker-based
+# or
+sudo ./install.sh --method static    # Nginx + systemd
 ```
 
 ---
 
-## Manual Installation
+## Agent Setup (Manual)
 
-### Option 1: Docker
+The agent requires root or `CAP_NET_RAW` for ICMP operations.
+
+### Prerequisites
 
 ```bash
-# Install Docker
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc > /dev/null
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-  https://download.docker.com/linux/ubuntu noble stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-
-# Clone and start
-git clone <your-repo-url> network-monitor
-cd network-monitor
-docker compose up -d
-
-# App is available at http://localhost:8080
+sudo apt update
+sudo apt install -y python3 python3-pip python3-venv iputils-ping traceroute dnsutils
 ```
 
-### Custom Port
+### Install & Run
 
-Edit `docker-compose.yml` and change the port mapping:
+```bash
+cd agent
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 
-```yaml
-ports:
-  - "3000:80"   # Change 3000 to your desired port
+# Run directly (development)
+sudo python3 monitor.py --port 5000
+
+# Run with gunicorn (production)
+sudo venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 monitor:app
 ```
 
-### Production with Reverse Proxy
+### Agent Systemd Service
 
-If running behind a reverse proxy (e.g., corporate Nginx/Apache), set the upstream to `http://localhost:8080`.
+```bash
+sudo tee /etc/systemd/system/network-monitor-agent.service > /dev/null <<EOF
+[Unit]
+Description=Network Monitor Agent
+After=network.target
 
-Example Nginx reverse proxy config:
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/network-monitor/agent
+ExecStart=/opt/network-monitor/agent/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 monitor:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now network-monitor-agent
+```
+
+---
+
+## UI Setup (Manual)
+
+### Build
+
+```bash
+# Install Node.js 20
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Build the frontend (point to agent URL)
+npm install
+VITE_AGENT_URL=http://YOUR_SERVER_IP:5000 npm run build
+```
+
+### Nginx Configuration
+
+```bash
+sudo apt install -y nginx
+
+sudo tee /etc/nginx/sites-available/network-monitor <<EOF
+server {
+    listen 8080;
+    server_name _;
+    root /var/www/network-monitor;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    # Proxy API requests to agent
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml;
+}
+EOF
+
+sudo mkdir -p /var/www/network-monitor
+sudo cp -r dist/* /var/www/network-monitor/
+sudo ln -sf /etc/nginx/sites-available/network-monitor /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl restart nginx
+```
+
+> **Tip**: When using the Nginx proxy for `/api/`, set `VITE_AGENT_URL` to empty string
+> so the UI calls `/api/...` directly through Nginx on the same origin.
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `VITE_AGENT_URL` | `http://localhost:5000` | Agent API base URL (set at build time) |
+
+### Agent Default Targets
+
+Edit `agent/monitor.py` → `DEFAULT_TARGETS` list to change monitoring targets.
+You can also manage targets at runtime via the API:
+
+```bash
+# Add a target
+curl -X POST http://localhost:5000/api/targets \
+  -H "Content-Type: application/json" \
+  -d '{"host": "example.com", "label": "Example"}'
+
+# List targets
+curl http://localhost:5000/api/targets
+
+# Delete a target
+curl -X DELETE http://localhost:5000/api/targets/101
+```
+
+---
+
+## API Reference
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/health` | GET | Agent health check |
+| `/api/targets` | GET | List all targets |
+| `/api/targets` | POST | Add a target `{host, label}` |
+| `/api/targets/:id` | DELETE | Remove a target |
+| `/api/timeline/:id` | GET | Get latency timeline data |
+| `/api/hops/:id` | GET | Get traceroute hops |
+| `/api/ping/:id` | GET | On-demand single ping |
+
+---
+
+## Firewall
+
+```bash
+sudo ufw allow 8080/tcp   # UI
+sudo ufw allow 5000/tcp   # Agent API (only if accessed directly)
+```
+
+---
+
+## Production with TLS (Reverse Proxy)
 
 ```nginx
 server {
@@ -84,98 +218,20 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
+
+    location /api/ {
+        proxy_pass http://localhost:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
 }
 ```
 
-### Managing the Container
-
-```bash
-# Stop
-docker compose down
-
-# Rebuild after updates
-docker compose up -d --build
-
-# View logs
-docker compose logs -f
-```
-
 ---
 
-## Option 2: Static Build (No Docker)
-
-### Build
+## Uninstall
 
 ```bash
-npm ci
-npm run build
-```
-
-This produces a `dist/` folder with static files.
-
-### Serve with Nginx
-
-```bash
-# Copy build output
-sudo cp -r dist/* /var/www/network-monitor/
-
-# Copy nginx config
-sudo cp nginx.conf /etc/nginx/sites-available/network-monitor
-sudo ln -s /etc/nginx/sites-available/network-monitor /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-### Serve with Node (simple)
-
-```bash
-npx serve dist -l 8080
-```
-
----
-
-## Option 3: Systemd Service (Linux)
-
-After building, create `/etc/systemd/system/network-monitor.service`:
-
-```ini
-[Unit]
-Description=Network Monitor
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/network-monitor
-ExecStart=/usr/bin/npx serve dist -l 8080
-Restart=always
-User=www-data
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable --now network-monitor
-```
-
----
-
-## Firewall
-
-Ensure the chosen port (default `8080`) is open:
-
-```bash
-# UFW
-sudo ufw allow 8080/tcp
-
-# firewalld
-sudo firewall-cmd --permanent --add-port=8080/tcp
-sudo firewall-cmd --reload
-```
-
----
-
-## Health Check
-
-```bash
-curl -f http://localhost:8080 || echo "Service down"
+chmod +x uninstall.sh
+sudo ./uninstall.sh
 ```
