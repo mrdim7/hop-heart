@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { TargetSidebar } from "@/components/TargetSidebar";
 import { LatencyTimeline } from "@/components/LatencyTimeline";
 import { TracerouteTable } from "@/components/TracerouteTable";
@@ -6,6 +6,7 @@ import { StatusBar } from "@/components/StatusBar";
 import { ConnectionBanner } from "@/components/ConnectionBanner";
 import {
   TARGETS as DEFAULT_TARGETS,
+  generateInitialTimeline,
   generateTimelinePoint,
   getHopsForTarget,
   TimelinePoint,
