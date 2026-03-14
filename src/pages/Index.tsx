@@ -47,15 +47,12 @@ const Index = () => {
     if (agentConnected === null) return; // still checking
 
     if (agentConnected) {
-      // Fetch real data from agent
       fetchTimeline(selectedId).then(data => {
         setTimelines(prev => ({ ...prev, [selectedId]: data }));
       });
       fetchHops(selectedId).then(setHops);
     } else {
-      // Simulated fallback
       if (!timelines[selectedId]) {
-        const { generateInitialTimeline } = await import("@/lib/network-data");
         setTimelines(prev => ({ ...prev, [selectedId]: generateInitialTimeline(selectedId) }));
       }
       setHops(getHopsForTarget(selectedId));
