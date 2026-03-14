@@ -15,14 +15,18 @@ import {
 } from "@/lib/network-data";
 import {
   checkAgentHealth,
-  isAgentAvailable,
   fetchTargets,
   fetchTimeline,
   fetchHops,
+  addTarget as apiAddTarget,
+  deleteTarget as apiDeleteTarget,
 } from "@/lib/agent-api";
+import { toast } from "sonner";
 
 const MAX_POINTS = 300;
 const POLL_INTERVAL = 1000;
+
+let localNextId = 100;
 
 const Index = () => {
   const [selectedId, setSelectedId] = useState("1");
@@ -32,20 +36,15 @@ const Index = () => {
   const [agentConnected, setAgentConnected] = useState<boolean | null>(null);
   const intervalRef = useRef<number>();
 
-  // Check agent on mount
   useEffect(() => {
     checkAgentHealth().then(ok => {
       setAgentConnected(ok);
-      if (ok) {
-        fetchTargets().then(setTargets);
-      }
+      if (ok) fetchTargets().then(setTargets);
     });
   }, []);
 
-  // Load data for selected target
   useEffect(() => {
-    if (agentConnected === null) return; // still checking
-
+    if (agentConnected === null) return;
     if (agentConnected) {
       fetchTimeline(selectedId).then(data => {
         setTimelines(prev => ({ ...prev, [selectedId]: data }));
@@ -59,19 +58,15 @@ const Index = () => {
     }
   }, [selectedId, agentConnected]);
 
-  // Polling loop
   useEffect(() => {
     intervalRef.current = window.setInterval(() => {
       if (agentConnected) {
-        // Poll real data from agent
         fetchTimeline(selectedId).then(data => {
           setTimelines(prev => ({ ...prev, [selectedId]: data }));
         });
         fetchHops(selectedId).then(setHops);
-        // Refresh target statuses periodically
         fetchTargets().then(setTargets);
       } else {
-        // Simulated updates
         const now = Date.now();
         setTimelines(prev => {
           const updated = { ...prev };
@@ -81,7 +76,6 @@ const Index = () => {
           }
           return updated;
         });
-
         setHops(prev =>
           prev.map(h => {
             const jitter = (Math.random() - 0.5) * h.avg * 0.3;
@@ -91,9 +85,48 @@ const Index = () => {
         );
       }
     }, POLL_INTERVAL);
-
     return () => clearInterval(intervalRef.current);
   }, [selectedId, agentConnected]);
+
+  const handleAddTarget = async (host: string, label: string) => {
+    if (agentConnected) {
+      const result = await apiAddTarget(host, label);
+      if (result) {
+        setTargets(prev => [...prev, { ...result, status: result.status || "good" }]);
+        setSelectedId(result.id);
+        toast.success(`Added target: ${label}`);
+      } else {
+        toast.error("Failed to add target");
+      }
+    } else {
+      // Local-only simulated target
+      localNextId++;
+      const id = String(localNextId);
+      const newTarget: Target = { id, label, host, status: "good" };
+      setTargets(prev => [...prev, newTarget]);
+      setTimelines(prev => ({ ...prev, [id]: generateInitialTimeline(id) }));
+      setSelectedId(id);
+      toast.success(`Added target: ${label} (simulated)`);
+    }
+  };
+
+  const handleDeleteTarget = async (id: string) => {
+    if (targets.length <= 1) {
+      toast.error("Cannot remove the last target");
+      return;
+    }
+    if (agentConnected) {
+      const ok = await apiDeleteTarget(id);
+      if (!ok) { toast.error("Failed to remove target"); return; }
+    }
+    setTargets(prev => prev.filter(t => t.id !== id));
+    setTimelines(prev => { const n = { ...prev }; delete n[id]; return n; });
+    if (selectedId === id) {
+      const remaining = targets.filter(t => t.id !== id);
+      setSelectedId(remaining[0]?.id || "1");
+    }
+    toast.success("Target removed");
+  };
 
   const data = timelines[selectedId] || [];
   const target = targets.find(t => t.id === selectedId) || targets[0];
@@ -102,7 +135,13 @@ const Index = () => {
     <div className="flex h-screen overflow-hidden flex-col">
       <ConnectionBanner connected={agentConnected} />
       <div className="flex flex-1 min-h-0">
-        <TargetSidebar targets={targets} selectedId={selectedId} onSelect={setSelectedId} />
+        <TargetSidebar
+          targets={targets}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          onAdd={handleAddTarget}
+          onDelete={handleDeleteTarget}
+        />
         <div className="flex-1 flex flex-col min-w-0">
           <StatusBar target={target} data={data} />
           <LatencyTimeline data={data} />
