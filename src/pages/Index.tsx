@@ -54,7 +54,7 @@ const Index = () => {
     } else {
       // Simulated fallback
       if (!timelines[selectedId]) {
-        const { generateInitialTimeline } = require("@/lib/network-data");
+        const { generateInitialTimeline } = await import("@/lib/network-data");
         setTimelines(prev => ({ ...prev, [selectedId]: generateInitialTimeline(selectedId) }));
       }
       setHops(getHopsForTarget(selectedId));
